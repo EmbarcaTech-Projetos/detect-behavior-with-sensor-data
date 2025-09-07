@@ -39,6 +39,8 @@ add_executable(src
             src.c 
             drivers/mpu9250/driver_mpu9250.c
             drivers/mlx90614/driver_mlx90164.c
+            apps/madgwick/madgwick.c
+            apps/network/network.c
 )
 
 pico_set_program_name(src "src")
@@ -56,11 +58,14 @@ target_link_libraries(src
 target_include_directories(src PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/drivers/mpu9250
         ${CMAKE_CURRENT_LIST_DIR}/drivers/mlx90614
+        ${CMAKE_CURRENT_LIST_DIR}/apps/madgwick
+        ${CMAKE_CURRENT_LIST_DIR}/apps/network
 )
 
 # Add any user requested libraries
 target_link_libraries(src 
         hardware_i2c
+        pico_cyw43_arch_lwip_threadsafe_background
         )
 
 pico_add_extra_outputs(src)
