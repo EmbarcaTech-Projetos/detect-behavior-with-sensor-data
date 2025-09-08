@@ -12,6 +12,8 @@
 // Correctly initialized identity quaternion (w, x, y, z)
 float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 
+const uint8_t MLX90614_SENSOR_ADDRESSES[5] = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E};
+
 // --- Configuration ---
 #define SAMPLING_RATE 10 // Hz
 #define SAMPLES 60       // Number of samples to collect before sending
@@ -36,10 +38,10 @@ float rot_x_samples[SAMPLES];
 float rot_y_samples[SAMPLES];
 float rot_z_samples[SAMPLES];
 
-float thm_1_samples[SAMPLES];
+float thm_samples[5][SAMPLES];
 
 // --- Network & JSON ---
-#define JSON_BUFFER_SIZE 8192 // Allocate a larger buffer for the batch JSON
+#define JSON_BUFFER_SIZE 16384 // Allocate a larger buffer for the batch JSON
 static char json_payload[JSON_BUFFER_SIZE];
 static HTTP_REQUEST_STATE_T *current_request; // Assuming this is defined in network.h
 
@@ -80,8 +82,8 @@ void format_json_request(char *buffer, size_t buffer_size) {
                            "\"thm_5\":%.2f",
                            acc_x_samples[i], acc_y_samples[i], acc_z_samples[i],
                            rot_w_samples[i], rot_x_samples[i], rot_y_samples[i], rot_z_samples[i],
-                           thm_1_samples[i], thm_1_samples[i], thm_1_samples[i], // Re-use thm_1 value
-                           thm_1_samples[i], thm_1_samples[i]);
+                           thm_samples[0][i], thm_samples[1][i], thm_samples[2][i],
+                           thm_samples[3][i], thm_samples[4][i]);
         ptr += written; remaining_size -= written;
 
         // End of sample object
@@ -99,6 +101,14 @@ void format_json_request(char *buffer, size_t buffer_size) {
     snprintf(ptr, remaining_size, "]}");
 }
 
+void i2c_init_gpio(i2c_inst_t *i2c_port, uint8_t sda_pin, uint8_t scl_pin) {
+    i2c_init(i2c_port, 100 * 1000);
+    gpio_set_function(sda_pin, GPIO_FUNC_I2C);
+    gpio_set_function(scl_pin, GPIO_FUNC_I2C);
+    gpio_pull_up(sda_pin);
+    gpio_pull_up(scl_pin);
+}
+
 int main() {
     stdio_init_all();
 
@@ -110,25 +120,55 @@ int main() {
     printf("--- Pico MPU-9250 & MLX90614 Data Logger ---\n");
 
     // Initialize the network (only once)
-    if (!network_init()) {
-        printf("Network initialization failed. Halting.\n");
-        while(true);
-    }
+    // if (!network_init()) {
+    //     printf("Network initialization failed. Halting.\n");
+    //     while(true);
+    // }
     
     // Initialize I2C for MPU9250
-    i2c_init(MPU9250_I2C_PORT, 100 * 1000);
-    gpio_set_function(MPU9250_I2C_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(MPU9250_I2C_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(MPU9250_I2C_SDA_PIN);
-    gpio_pull_up(MPU9250_I2C_SCL_PIN);
+    i2c_init_gpio(MPU9250_I2C_PORT, MPU9250_I2C_SDA_PIN, MPU9250_I2C_SCL_PIN);
 
-    // Initialize I2C for MLX90614
-    i2c_init(MLX90614_I2C_PORT, 100 * 1000); 
-    gpio_set_function(MLX90614_I2C_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(MLX90614_I2C_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(MLX90614_I2C_SDA_PIN);
-    gpio_pull_up(MLX90614_I2C_SCL_PIN);
+    // Initialize I2C for multiple MLX90614
+    i2c_init_gpio(MLX90614_I2C_PORT, MLX90614_I2C_SDA_PIN, MLX90614_I2C_SCL_PIN);
     
+    printf("\n--- Pico I2C Bus Scanner ---\n");
+    printf("   0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F\n");
+
+    for (int row = 0; row < 8; ++row) {
+        // Print the row header (00, 10, 20, etc.)
+        printf("%02X ", row * 16);
+
+        for (int col = 0; col < 16; ++col) {
+            int addr = (row * 16) + col;
+
+            // Skip reserved addresses
+            if (addr < 0x08 || addr > 0x77) {
+                printf("   ");
+                continue;
+            }
+
+            // Check for a device at this address
+            int ret;
+            uint8_t dummy; // Not used, just needed for the function call
+            
+            // i2c_write_blocking returns number of bytes written or an error code (< 0)
+            // A successful 0-byte write (ACK received) will return 0.
+            ret = i2c_write_blocking(MLX90614_I2C_PORT, addr, &dummy, 1, false);
+            if(ret < 0) {
+                ret = i2c_write_blocking(MPU9250_I2C_PORT, addr, &dummy, 1, false);
+            } 
+
+            if (ret >= 0) {
+                printf("%02X ", addr); // Device found, print its address
+            } else {
+                printf("-- ");       // No device found
+            }
+        }
+        printf("\n"); // Newline at the end of the row
+    }
+
+    printf("\nScan complete.\n");
+
     printf("Attempting to initialize MPU-9250...\n");
     mpu9250_init();
     check_mpu9250_identity();
@@ -145,15 +185,12 @@ int main() {
         
         // --- 1. Data Collection Phase ---
         for (sample_count = 0; sample_count < SAMPLES; sample_count++) {
-            cyw43_arch_poll(); // Keep network stack running during collection
+            // cyw43_arch_poll(); // Keep network stack running during collection
 
             // Read MPU-9250
             mpu9250_read_raw_data(accelerometer, gyroscope, magnetometer);
-            
-            // Read MLX90614
-            int mlx_result = mlx90614_read_raw_data(temp_read_buffer);
 
-            // --- Convert and Store Data ---
+            // --- Convert and Store IMU Data ---
 
             // Accelerometer: Raw -> m/s^2
             acc_x_samples[sample_count] = (accelerometer[0] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
@@ -177,17 +214,23 @@ int main() {
             rot_x_samples[sample_count] = q[1];
             rot_y_samples[sample_count] = q[2];
             rot_z_samples[sample_count] = q[3];
+            
+            // Read the multiples MLX90614
+            for(uint8_t i=0; i<5; i++) {
+                int mlx_result = mlx90614_read_raw_data(MLX90614_SENSOR_ADDRESSES[i] ,temp_read_buffer);
 
-            // Temperature: Raw -> °C
-            if (mlx_result != PICO_ERROR_GENERIC) {
-                uint16_t raw_temp = (uint16_t)temp_read_buffer[1] << 8 | temp_read_buffer[0];
-                if (!(raw_temp & 0x8000)) { // Check for error flag
-                    thm_1_samples[sample_count] = (raw_temp * 0.02) - 273.15;
+                // --- Convert and Store IR Data ---
+                // Temperature: Raw -> °C
+                if (mlx_result != PICO_ERROR_GENERIC) {
+                    uint16_t raw_temp = (uint16_t)temp_read_buffer[1] << 8 | temp_read_buffer[0];
+                    if (!(raw_temp & 0x8000)) { // Check for error flag
+                        thm_samples[i][sample_count] = (raw_temp * 0.02) - 273.15;
+                    } else {
+                        thm_samples[i][sample_count] = 0.0f; // Store 0 on error
+                    }
                 } else {
-                    thm_1_samples[sample_count] = 0.0f; // Store 0 on error
+                    thm_samples[i][sample_count] = 0.0f; // Store 0 on error
                 }
-            } else {
-                thm_1_samples[sample_count] = 0.0f; // Store 0 on error
             }
 
             printf("Sample %d/%d collected.\n", sample_count + 1, SAMPLES);

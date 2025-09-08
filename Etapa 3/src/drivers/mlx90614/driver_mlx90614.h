@@ -8,6 +8,6 @@
 #define MLX90614_I2C_SDA_PIN 4
 #define MLX90614_I2C_SCL_PIN 5
 
-int mlx90614_read_raw_data(uint8_t read_buffer[3]);
+int mlx90614_read_raw_data(uint8_t addr, uint8_t read_buffer[3]);
 
 #endif
