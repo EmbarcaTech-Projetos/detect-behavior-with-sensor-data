@@ -13,11 +13,15 @@
 // --- Configuration ---
 float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 const uint8_t MLX_ADDR[5] = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E};
-#define SAMPLING_RATE 20
-#define SAMPLES 120
+#define SAMPLES 60
 #define ACCEL_SENSITIVITY (16384.0f)
 #define GYRO_SENSITIVITY (131.0f)
 #define GRAVITY_MS2 (9.80665f)
+
+#define FINAL_SAMPLING_RATE_HZ 10 // The effective rate of the data you send (60 samples over 6s = 10 Hz)
+#define FAST_SAMPLING_RATE_HZ 500
+#define DOWNSAMPLE_FACTOR (FAST_SAMPLING_RATE_HZ / FINAL_SAMPLING_RATE_HZ) // How many fast samples to average
+#define FAST_SAMPLE_PERIOD_US (1000000 / FAST_SAMPLING_RATE_HZ) // Period for the fast loop
 
 // --- Data Storage ---
 float acc_x_samples[SAMPLES], acc_y_samples[SAMPLES], acc_z_samples[SAMPLES];
@@ -40,7 +44,7 @@ typedef enum {
 
 // --- Helper Functions ---
 void i2c_init_gpio(i2c_inst_t *i2c_port, uint8_t sda_pin, uint8_t scl_pin) {
-    i2c_init(i2c_port, 100 * 1000);
+    i2c_init(i2c_port, 200 * 1000);
     gpio_set_function(sda_pin, GPIO_FUNC_I2C);
     gpio_set_function(scl_pin, GPIO_FUNC_I2C);
     gpio_pull_up(sda_pin);
@@ -82,39 +86,71 @@ int main() {
                 break;
 
             case STATE_COLLECTING_DATA:
-                if (time_reached(next_sample_time)) {
-                    next_sample_time = make_timeout_time_ms(1000 / SAMPLING_RATE);
-                    
-                    int16_t accel[3], gyro[3], mag[3];
-                    mpu9250_read_raw_data(accel, gyro, mag);
+                if (sample_count < SAMPLES) {
+                    // Accumulators for averaging
+                    float acc_x_sum = 0.0f, acc_y_sum = 0.0f, acc_z_sum = 0.0f;
+                    float thm_sum[5] = {0.0f};
+                    int valid_thm_reads[5] = {0};
 
-                    acc_x_samples[sample_count] = -(accel[0] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
-                    acc_y_samples[sample_count] = -(accel[1] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
-                    acc_z_samples[sample_count] = -(accel[2] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
-                    
-                    float gx_rad = (gyro[0] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
-                    float gy_rad = (gyro[1] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
-                    float gz_rad = (gyro[2] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
+                    printf("Downsampling for final sample %d/%d...\n", sample_count + 1, SAMPLES);
+                    absolute_time_t next_fast_sample_time = get_absolute_time();
 
-                    madgwick_ahrs_update_imu(gx_rad, gy_rad, gz_rad, acc_x_samples[sample_count], acc_y_samples[sample_count], acc_z_samples[sample_count], q);
-                    rot_w_samples[sample_count] = q[0]; rot_x_samples[sample_count] = q[1];
-                    rot_y_samples[sample_count] = q[2]; rot_z_samples[sample_count] = q[3];
-                    
-                    for(uint8_t i=0; i<5; i++) {
+                    // Inner loop to collect data at high frequency
+                    for (int i = 0; i < DOWNSAMPLE_FACTOR; i++) {
+                        busy_wait_until(next_fast_sample_time);
+                        next_fast_sample_time = make_timeout_time_us(FAST_SAMPLE_PERIOD_US);
+
+                        // 1. Read MPU9250
+                        int16_t accel[3], gyro[3], mag[3];
+                        mpu9250_read_raw_data(accel, gyro, mag);
+
+                        float ax = -(accel[0] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
+                        float ay = (accel[1] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
+                        float az = -(accel[2] / ACCEL_SENSITIVITY) * GRAVITY_MS2;
+                        acc_x_sum += ax;
+                        acc_y_sum += ay;
+                        acc_z_sum += az;
+
+                        float gx_rad = -(gyro[0] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
+                        float gy_rad = (gyro[1] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
+                        float gz_rad = -(gyro[2] / GYRO_SENSITIVITY) * (M_PI / 180.0f);
+                        
+                        // 2. Update orientation filter with every fast sample for accuracy
+                        // NOTE: Ensure your Madgwick library is configured with a sample
+                        // frequency of FAST_SAMPLING_RATE_HZ (1000 Hz).
+                        madgwick_ahrs_update_imu(gx_rad, gy_rad, gz_rad, ax, ay, az, q);
+                        
+                        // 3. Read ONE MLX90614 sensor per loop to distribute the I2C load
+                        uint8_t mlx_idx = i % 5;
                         uint8_t temp_buf[3];
-                        if (mlx90614_read_raw_data(MLX_ADDR[i] ,temp_buf) != PICO_ERROR_GENERIC) {
+                        if (mlx90614_read_raw_data(MLX_ADDR[mlx_idx], temp_buf) != PICO_ERROR_GENERIC) {
                             uint16_t raw_temp = (uint16_t)temp_buf[1] << 8 | temp_buf[0];
-                            thm_samples[i][sample_count] = !(raw_temp & 0x8000) ? (raw_temp * 0.02) - 273.15 : 0.0f;
-                        } else { thm_samples[i][sample_count] = 0.0f; }
+                            if (!(raw_temp & 0x8000)) { // Check for valid reading
+                                thm_sum[mlx_idx] += (raw_temp * 0.02) - 273.15;
+                                valid_thm_reads[mlx_idx]++;
+                            }
+                        }
+                    } // End of fast sampling loop
+
+                    acc_x_samples[sample_count] = acc_x_sum / DOWNSAMPLE_FACTOR;
+                    acc_y_samples[sample_count] = acc_y_sum / DOWNSAMPLE_FACTOR;
+                    acc_z_samples[sample_count] = acc_z_sum / DOWNSAMPLE_FACTOR;
+                    
+                    rot_w_samples[sample_count] = q[0];
+                    rot_x_samples[sample_count] = q[1];
+                    rot_y_samples[sample_count] = q[2];
+                    rot_z_samples[sample_count] = q[3];
+                    
+                    for(uint8_t i = 0; i < 5; i++) {
+                        thm_samples[i][sample_count] = (valid_thm_reads[i] > 0) ? (thm_sum[i] / valid_thm_reads[i]) : 0.0f;
                     }
 
-                    printf("Sample %d/%d collected.\n", sample_count + 1, SAMPLES);
                     sample_count++;
+                }
 
-                    if (sample_count >= SAMPLES) {
-                        printf("Collection complete.\n");
-                        current_state = STATE_CALCULATING_SIZE;
-                    }
+                if (sample_count >= SAMPLES) {
+                    printf("Collection complete.\n");
+                    current_state = STATE_CALCULATING_SIZE;
                 }
                 break;
             

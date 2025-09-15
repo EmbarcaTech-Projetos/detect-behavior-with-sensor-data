@@ -2,7 +2,7 @@
 #include "madgwick.h"
 
 // System constants
-#define deltat 0.2f 
+#define deltat 0.001f 
 
 // Madgwick filter parameters
 #define beta 0.1f // algorithm gain

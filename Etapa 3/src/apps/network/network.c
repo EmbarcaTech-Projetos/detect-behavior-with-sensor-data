@@ -7,11 +7,11 @@
 #include "network.h"
 
 // --- Configuration ---
-#define WIFI_SSID "XXXXX"
-#define WIFI_PASSWORD "XXXX"
-#define API_HOST "XXX.XXX.XXX.XXX"
-#define API_URL "/api/"
-#define API_PORT 80
+#define WIFI_SSID "DUKA"
+#define WIFI_PASSWORD "amizade2014"
+#define API_HOST "192.168.1.10"
+#define API_URL "/api/predict/"
+#define API_PORT 8000
 #define WIFI_RETRY_DELAY_MS 5000 // Time to wait between connection retries
 
 // --- Internal State ---
