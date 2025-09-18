@@ -1,0 +1,79 @@
+# Created by Gemini - https://gemini.google.com/
+# Template for CMake, C/C++, and Python projects
+
+### CMake ###
+# Ignore build directories and CMake-generated files
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeLists.txt.user
+CTestTestfile.cmake
+install_manifest.txt
+Makefile
+
+# Ignore common build directory names
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+---
+
+### C/C++ ###
+# Ignore compiled object files, libraries, and executables
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+*.out
+*.app
+*.gch
+*.pch
+*.d
+
+---
+
+### Python ###
+# Ignore bytecode and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore distribution and packaging artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+sdist/
+wheels/
+*.egg
+*.whl
+
+# Ignore virtual environments
+env/
+venv/
+.env/
+.venv/
+
+# Ignore installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore profiler and coverage data
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.prof
+*.pstat
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints

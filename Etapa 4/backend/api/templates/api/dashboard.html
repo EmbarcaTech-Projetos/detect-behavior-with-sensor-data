@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Predições</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #1c1e21;
+        }
+        #results-log {
+            max-width: 800px;
+            margin: 20px auto;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            min-height: 100px;
+        }
+        .result-box {
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border: 1px solid;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 1.1em;
+        }
+        /* Cor para gestos NÃO destrutivos */
+        .non-destructive {
+            background-color: #e7f3ff; /* Azul leve */
+            border-color: #b3d7ff;
+            color: #004085;
+        }
+        /* Cor para gestos DESTRUTIVOS */
+        .destructive {
+            background-color: #fdecea; /* Vermelho leve */
+            border-color: #f5c6cb;
+            color: #721c24;
+            font-weight: bold;
+        }
+        .timestamp {
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Log de Gestos em Tempo Real</h1>
+
+    <div id="results-log">
+        </div>
+
+    <script>
+        const resultsLog = document.getElementById('results-log');
+
+        async function fetchResults() {
+            try {
+                // Pergunta ao nosso novo endpoint pelos últimos resultados
+                const response = await fetch('/api/latest_predictions/');
+                const predictions = await response.json();
+
+                // Limpa o log atual
+                resultsLog.innerHTML = '';
+
+                if (predictions.length === 0) {
+                    resultsLog.innerHTML = '<p>Aguardando a primeira predição...</p>';
+                    return;
+                }
+
+                // Cria e adiciona os novos resultados na tela
+                predictions.forEach(pred => {
+                    const resultBox = document.createElement('div');
+                    
+                    // Adiciona a classe CSS correta para a cor
+                    const behaviorClass = pred.is_destructive ? 'destructive' : 'non-destructive';
+                    resultBox.classList.add('result-box', behaviorClass);
+
+                    // Adiciona o conteúdo (nome do gesto e hora)
+                    resultBox.innerHTML = `
+                        <span>${pred.gesture_name}</span>
+                        <span class="timestamp">${pred.predicted_at}</span>
+                    `;
+
+                    resultsLog.appendChild(resultBox);
+                });
+
+            } catch (error) {
+                console.error("Erro ao buscar predições:", error);
+                resultsLog.innerHTML = '<p style="color: red;">Erro ao conectar com o servidor.</p>';
+            }
+        }
+
+        // Inicia o processo: busca os resultados a cada 2 segundos (2000 ms)
+        fetchResults(); // Chama uma vez no início
+        setInterval(fetchResults, 2000);
+    </script>
+
+</body>
+</html>
